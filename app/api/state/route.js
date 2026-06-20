@@ -1,47 +1,57 @@
-import { put, head } from '@vercel/blob';
 import { NextResponse } from 'next/server';
+import { promises as fs } from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 
 export const dynamic = 'force-dynamic';
 
-const STATE_PATHNAME = 'state/app-state.json';
+/*
+  Stockage par fichier JSON local, sans dépendance externe (pas de
+  Vercel Blob, pas de base de données).
 
-async function findStateBlob() {
+  ATTENTION (important si déployé sur Vercel) :
+  Le système de fichiers des fonctions serverless Vercel est éphémère :
+  - seul /tmp est inscriptible, et son contenu n'est PAS garanti de
+    persister entre deux requêtes (chaque requête peut atterrir sur une
+    instance différente, recréée à froid sans /tmp précédent)
+  - même quand ça persiste un moment, tout redéploiement repart de zéro
+  Résultat : sur Vercel, attends-toi à des pertes de données occasionnelles.
+  Ce mode convient bien en local (npm run dev) ou sur un serveur classique
+  (VPS, conteneur avec disque persistant) où le système de fichiers est
+  stable.
+*/
+
+const STATE_DIR = process.env.VERCEL ? '/tmp' : path.join(process.cwd(), '.data');
+const STATE_FILE = path.join(STATE_DIR, 'app-state.json');
+
+async function ensureDir() {
   try {
-    return await head(STATE_PATHNAME);
+    await fs.mkdir(STATE_DIR, { recursive: true });
+  } catch (e) {
+    // ignore
+  }
+}
+
+function computeEtag(content) {
+  return crypto.createHash('sha1').update(content).digest('hex');
+}
+
+async function readStateFile() {
+  try {
+    const content = await fs.readFile(STATE_FILE, 'utf8');
+    return { content, etag: computeEtag(content) };
   } catch (e) {
     return null;
   }
 }
 
-// Détecte un conflit de précondition (ifMatch) sans dépendre d'un export
-// de classe qui peut ne pas exister selon la version de @vercel/blob
-// installée (c'est ce qui causait "Right-hand side of 'instanceof' is
-// not an object" : BlobPreconditionFailedError était undefined).
-function isPreconditionFailedError(err) {
-  if (!err) return false;
-  const status = err.status || err.statusCode || err?.response?.status;
-  if (status === 412) return true;
-  const name = err.name || '';
-  const message = err.message || '';
-  return (
-    name.includes('PreconditionFailed') ||
-    message.includes('precondition') ||
-    message.includes('Precondition') ||
-    message.includes('412')
-  );
-}
-
 export async function GET() {
   try {
-    const existing = await findStateBlob();
+    const existing = await readStateFile();
     if (!existing) {
       return NextResponse.json({ state: null, etag: null });
     }
-    const res = await fetch(existing.url, { cache: 'no-store' });
-    if (!res.ok) {
-      return NextResponse.json({ state: null, etag: null });
-    }
-    const data = await res.json();
+    const data = JSON.parse(existing.content);
     return NextResponse.json({ state: data, etag: existing.etag });
   } catch (err) {
     console.error('GET /api/state error', err);
@@ -57,27 +67,22 @@ export async function PUT(request) {
       return NextResponse.json({ error: 'missing_state' }, { status: 400 });
     }
 
-    const putOptions = {
-      access: 'public',
-      contentType: 'application/json',
-      allowOverwrite: true,
-      addRandomSuffix: false,
-    };
+    await ensureDir();
 
-    if (etag) {
-      putOptions.ifMatch = etag;
+    const existing = await readStateFile();
+    if (etag && existing && existing.etag !== etag) {
+      return NextResponse.json({ error: 'conflict' }, { status: 409 });
+    }
+    if (etag && !existing) {
+      // un etag était attendu mais il n'y a plus de fichier (ex: /tmp vidé) :
+      // on accepte quand même l'écriture plutôt que de bloquer l'utilisateur.
     }
 
-    try {
-      const result = await put(STATE_PATHNAME, JSON.stringify(state), putOptions);
-      const fresh = await head(STATE_PATHNAME);
-      return NextResponse.json({ ok: true, etag: fresh.etag, url: result.url });
-    } catch (err) {
-      if (isPreconditionFailedError(err)) {
-        return NextResponse.json({ error: 'conflict' }, { status: 409 });
-      }
-      throw err;
-    }
+    const content = JSON.stringify(state);
+    await fs.writeFile(STATE_FILE, content, 'utf8');
+    const freshEtag = computeEtag(content);
+
+    return NextResponse.json({ ok: true, etag: freshEtag });
   } catch (err) {
     console.error('PUT /api/state error', err);
     return NextResponse.json({ error: 'write_failed' }, { status: 500 });
