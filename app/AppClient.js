@@ -945,6 +945,7 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, o
   const totalBenef = sold.reduce((s, m) => s + (benefice(m) || 0), 0);
   const col = CLUB_COLOR[card.club] || { bg: "#eee", fg: "#333" };
   const { champCount, perMatch } = getCardStats(card);
+  const totalSpend = getCardTotalSpend(card);
 
   return (
     <div className="view">
@@ -959,6 +960,7 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, o
         {cards.map((c) => {
           const ccol = CLUB_COLOR[c.club] || { bg: "#eee", fg: "#333" };
           const { perMatch: cPerMatch } = getCardStats(c);
+          const cTotalSpend = getCardTotalSpend(c);
           return (
             <div
               key={c.id}
@@ -971,7 +973,7 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, o
               <div className="club-name">{c.holder}</div>
               <div className="club-stats">
                 <span>
-                  Abo <b>{fmtMoney0(c.aboPrice + c.extraCard)}</b>
+                  Dépense totale <b>{fmtMoney0(cTotalSpend)}</b>
                 </span>
                 <span>
                   /match <b>{fmtMoney(cPerMatch)}</b>
@@ -984,8 +986,14 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, o
 
       <div className="kpi-row">
         <div className="kpi">
-          <div className="kpi-label">Abonnement annuel</div>
+          <div className="kpi-label">Abonnement (membership)</div>
           <div className="kpi-value">{fmtMoney0(card.aboPrice + card.extraCard)}</div>
+          <div className="kpi-sub">prix fixe payé au club, ne change pas</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">Dépense totale carte</div>
+          <div className="kpi-value">{fmtMoney0(totalSpend)}</div>
+          <div className="kpi-sub">+ Supercoupe / LDC / CDF / matchs ajoutés</div>
         </div>
         <div className="kpi">
           <div className="kpi-label">Matchs championnat dom.</div>
@@ -1269,6 +1277,7 @@ function ReventeView({ state, onSell, onUndo, onDeleteMatch, updateMatchField })
 function MembershipsView({ state }) {
   const cards = state.cards;
   const totalCost = cards.reduce((s, c) => s + c.aboPrice + c.extraCard, 0);
+  const totalSpendAll = cards.reduce((s, c) => s + getCardTotalSpend(c), 0);
   return (
     <div className="view">
       <div className="view-head">
@@ -1285,6 +1294,12 @@ function MembershipsView({ state }) {
         <div className="kpi">
           <div className="kpi-label">Coût total memberships</div>
           <div className="kpi-value">{fmtMoney0(totalCost)}</div>
+          <div className="kpi-sub">abonnements seuls</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">Dépense totale réelle</div>
+          <div className="kpi-value">{fmtMoney0(totalSpendAll)}</div>
+          <div className="kpi-sub">+ Supercoupe / LDC / CDF / matchs ajoutés</div>
         </div>
         <div className="kpi">
           <div className="kpi-label">Clubs suivis</div>
@@ -1299,7 +1314,8 @@ function MembershipsView({ state }) {
               <th>Titulaire</th>
               <th>Prix abonnement</th>
               <th>Frais carte</th>
-              <th>Coût total</th>
+              <th>Coût membership</th>
+              <th>Dépense totale</th>
               <th>Nb matchs champ.</th>
               <th>Prix / match</th>
             </tr>
@@ -1308,6 +1324,7 @@ function MembershipsView({ state }) {
             {cards.map((c) => {
               const col = CLUB_COLOR[c.club] || { bg: "#eee", fg: "#333" };
               const { champCount: cChampCount, perMatch: cPerMatch } = getCardStats(c);
+              const cTotalSpend = getCardTotalSpend(c);
               return (
                 <tr key={c.id}>
                   <td>
@@ -1318,8 +1335,11 @@ function MembershipsView({ state }) {
                   <td className="cell-event">{c.holder}</td>
                   <td className="cell-num">{fmtMoney(c.aboPrice)}</td>
                   <td className="cell-num">{c.extraCard ? fmtMoney(c.extraCard) : "—"}</td>
-                  <td className="cell-num" style={{ fontWeight: 700 }}>
+                  <td className="cell-num">
                     {fmtMoney(c.aboPrice + c.extraCard)}
+                  </td>
+                  <td className="cell-num" style={{ fontWeight: 700 }}>
+                    {fmtMoney(cTotalSpend)}
                   </td>
                   <td className="cell-num">{cChampCount}</td>
                   <td className="cell-num">{fmtMoney(cPerMatch)}</td>
