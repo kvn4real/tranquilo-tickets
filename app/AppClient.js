@@ -106,6 +106,40 @@ function resyncChampPrices(card) {
   });
 }
 
+/* Répare un state potentiellement sauvegardé avec une ancienne version
+   du code (avant que getCardStats/resyncChampPrices/getCardTotalSpend
+   existent). Ne touche JAMAIS aux données de vente (status, acheteur,
+   prixVente, dateVente, lieuVente) : seuls les champs structurels sont
+   corrigés, pour ne jamais perdre une vente déjà enregistrée. */
+function migrateState(state) {
+  if (!state || !Array.isArray(state.cards)) return state;
+  state.cards.forEach((card) => {
+    card.matches = (card.matches || []).map((m) => {
+      // Type manquant ou invalide -> on le redéduit comme à la construction initiale
+      const validTypes = ["champ", "ldc", "cdf", "conf", "other", "manual"];
+      if (!m.type || !validTypes.includes(m.type)) {
+        const isChamp = !!m.journee;
+        const isLDC = /LDC/i.test(m.event || "");
+        const isCDF = /CDF/i.test(m.event || "");
+        const isConf = /conference/i.test(m.event || "");
+        let type = isChamp ? "champ" : "other";
+        if (isLDC) type = "ldc";
+        else if (isCDF) type = "cdf";
+        else if (isConf) type = "conf";
+        if (m.manual) type = "manual";
+        m.type = type;
+      }
+      if (m.prixAchat === undefined || m.prixAchat === null) m.prixAchat = 0;
+      return m;
+    });
+    // Recalcule toujours le prix/match des matchs "champ" à partir de
+    // aboPrice/extraCard/champCount courants : c'est la seule source
+    // de vérité, jamais une valeur figée venant d'un ancien state.
+    resyncChampPrices(card);
+  });
+  return state;
+}
+
 /* ============================================================
    BUILD INITIAL STATE
    ============================================================ */
@@ -181,6 +215,8 @@ body{background:var(--paper); color:var(--ink); font-family:var(--sans); font-si
 .season-pill{font-family:var(--mono); font-size:11px; background:#262a2d; color:#cfd6d0; padding:4px 10px; border-radius:20px;}
 .savestate{font-size:11px; color:#a9a399;}
 .savestate.err{color:#e2a06b;}
+.reset-btn{appearance:none; border:1px solid #3a3e41; background:#262a2d; color:#cfd6d0; padding:5px 11px; border-radius:6px; font-size:11px; font-weight:600; cursor:pointer; font-family:var(--sans);}
+.reset-btn:hover{border-color:var(--red); color:#f0ede5;}
 .nav{position:sticky; top:53px; z-index:49; background:var(--paper-raised); border-bottom:1px solid var(--line); display:flex; overflow-x:auto; padding:0 12px;}
 .nav-btn{appearance:none; border:none; background:none; cursor:pointer; padding:13px 16px; font-size:13px; font-weight:600; color:var(--muted); white-space:nowrap; border-bottom:2px solid transparent; font-family:var(--sans);}
 .nav-btn:hover{color:var(--ink);}
@@ -465,6 +501,8 @@ export default function App() {
   const saveTimer = useRef(null);
   const initialized = useRef(false);
 
+  const [needsResave, setNeedsResave] = useState(false);
+
   /* ---------- load ---------- */
   useEffect(() => {
     (async () => {
@@ -472,8 +510,15 @@ export default function App() {
         const res = await fetch("/api/state", { cache: "no-store" });
         const data = await res.json();
         if (data.state) {
-          setState(data.state);
+          const before = JSON.stringify(data.state);
+          const migrated = migrateState(data.state);
+          const after = JSON.stringify(migrated);
+          setState(migrated);
           etagRef.current = data.etag;
+          // Si la migration a changé quelque chose (ancien format détecté),
+          // on force une ré-écriture immédiate du fichier serveur pour que
+          // la correction soit définitive et ne se reproduise plus.
+          if (before !== after) setNeedsResave(true);
         } else {
           const init = buildInitialState();
           setState(init);
@@ -538,6 +583,16 @@ export default function App() {
     },
     [persist]
   );
+
+  /* Sauvegarde immédiate après une migration de données (ancien format
+     détecté au chargement), pour corriger le fichier serveur une bonne
+     fois pour toutes. */
+  useEffect(() => {
+    if (needsResave && state) {
+      persist(state);
+      setNeedsResave(false);
+    }
+  }, [needsResave, state, persist]);
 
   /* ---------- generic match field update ---------- */
   const updateMatchField = (cardId, matchId, field, value) => {
@@ -608,6 +663,15 @@ export default function App() {
     });
   };
 
+  const handleResetAll = () => {
+    if (!window.confirm("Réinitialiser toutes les données ? Toutes les ventes, acheteurs et matchs ajoutés seront définitivement perdus, et on repart du calendrier de base.")) {
+      return;
+    }
+    const init = buildInitialState();
+    setState(init);
+    persist(init);
+  };
+
   if (!state) {
     return (
       <div style={{ padding: 40, fontFamily: "sans-serif", color: "#6b6457" }}>Chargement…</div>
@@ -636,6 +700,9 @@ export default function App() {
             {saveStatus === "error" && "Erreur de sauvegarde"}
             {saveStatus === "idle" && ""}
           </span>
+          <button className="reset-btn" onClick={handleResetAll} title="Effacer toutes les données et repartir du calendrier de base">
+            Réinitialiser
+          </button>
           <span className="season-pill">Saison 2026 – 2027</span>
         </div>
       </div>
