@@ -1,4 +1,4 @@
-import { put, head, list, BlobPreconditionFailedError } from '@vercel/blob';
+import { put, head } from '@vercel/blob';
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
@@ -11,6 +11,24 @@ async function findStateBlob() {
   } catch (e) {
     return null;
   }
+}
+
+// Détecte un conflit de précondition (ifMatch) sans dépendre d'un export
+// de classe qui peut ne pas exister selon la version de @vercel/blob
+// installée (c'est ce qui causait "Right-hand side of 'instanceof' is
+// not an object" : BlobPreconditionFailedError était undefined).
+function isPreconditionFailedError(err) {
+  if (!err) return false;
+  const status = err.status || err.statusCode || err?.response?.status;
+  if (status === 412) return true;
+  const name = err.name || '';
+  const message = err.message || '';
+  return (
+    name.includes('PreconditionFailed') ||
+    message.includes('precondition') ||
+    message.includes('Precondition') ||
+    message.includes('412')
+  );
 }
 
 export async function GET() {
@@ -43,7 +61,7 @@ export async function PUT(request) {
       access: 'public',
       contentType: 'application/json',
       allowOverwrite: true,
-      addRandomSuffix: false
+      addRandomSuffix: false,
     };
 
     if (etag) {
@@ -55,7 +73,7 @@ export async function PUT(request) {
       const fresh = await head(STATE_PATHNAME);
       return NextResponse.json({ ok: true, etag: fresh.etag, url: result.url });
     } catch (err) {
-      if (err instanceof BlobPreconditionFailedError) {
+      if (isPreconditionFailedError(err)) {
         return NextResponse.json({ error: 'conflict' }, { status: 409 });
       }
       throw err;
