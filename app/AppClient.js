@@ -91,6 +91,7 @@ function buildInitialState() {
         lieuVente: m.lieu_vente || "",
         lieuAchat: "",
         prixVente: m.prix_vente || null,
+        manual: false,
       };
     });
 
@@ -171,6 +172,7 @@ tbody tr:hover{background:#faf9f5;}
 .badge.vendu{background:var(--accent-soft); color:var(--accent);} .badge.vendu .badge-dot{background:var(--accent);}
 .badge.acompte{background:var(--gold-soft); color:var(--gold);} .badge.acompte .badge-dot{background:var(--gold);}
 .badge.indispo{background:#ece9e2; color:var(--muted);} .badge.indispo .badge-dot{background:var(--muted);}
+.badge.manual{background:#eee7f7; color:#5b3a99;}
 .benefice-pos{color:var(--accent); font-weight:700;} .benefice-neg{color:var(--red); font-weight:700;} .benefice-zero{color:var(--muted);}
 .btn{appearance:none; border:1px solid var(--line); background:var(--paper-raised); color:var(--ink); padding:8px 14px; border-radius:7px; font-size:12.5px; font-weight:600; cursor:pointer; font-family:var(--sans);}
 .btn:hover{border-color:var(--accent); color:var(--accent);}
@@ -184,7 +186,7 @@ tbody tr:hover{background:#faf9f5;}
 .icon-btn{appearance:none; border:none; background:none; cursor:pointer; color:var(--muted); padding:4px 6px; border-radius:5px; font-size:14px;}
 .icon-btn:hover{background:var(--red-soft); color:var(--red);}
 .section{background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius); padding:18px; margin-bottom:18px;}
-.section-title{font-family:var(--serif); font-size:16px; font-weight:700; margin:0 0 12px;}
+.section-title{font-family:var(--serif); font-size:16px; font-weight:700; margin:0 0 12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
 .form-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:12px;}
 .form-field label{display:block; font-size:10.5px; text-transform:uppercase; letter-spacing:0.4px; color:var(--muted); margin-bottom:4px; font-weight:600;}
 .form-field input, .form-field select{width:100%; border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:13px; font-family:inherit; background:var(--paper);}
@@ -213,6 +215,10 @@ tbody tr:hover{background:#faf9f5;}
 .modal-actions .btn{flex:1; text-align:center;}
 .modal-benef{font-family:var(--mono); font-weight:700; font-size:15px; padding:10px 12px; background:var(--accent-soft); color:var(--accent); border-radius:8px; margin-bottom:14px;}
 .modal-benef.neg{background:var(--red-soft); color:var(--red);}
+.client-card{background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin-bottom:12px;}
+.client-head{display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap;}
+.client-name{font-family:var(--serif); font-size:16px; font-weight:700;}
+.client-meta{font-size:11.5px; color:var(--muted);}
 @media (max-width:800px){.recap-grid{grid-template-columns:1fr;}}
 @media (max-width:640px){.view{padding:16px 12px 50px;} thead th, tbody td{padding:7px 8px;} .view-title{font-size:20px;}}
 .footer-note{text-align:center; color:var(--muted); font-size:11px; padding:30px 0 10px;}
@@ -276,6 +282,56 @@ function SellModal({ match, onClose, onConfirm }) {
 }
 
 /* ============================================================
+   ADD MATCH MODAL — nom + date + prix d'achat libres
+   ============================================================ */
+function AddMatchModal({ card, onClose, onConfirm }) {
+  const [event, setEvent] = useState("");
+  const [date, setDate] = useState("");
+  const [prixAchat, setPrixAchat] = useState("");
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Ajouter un match</h3>
+        <div className="sub">
+          {CLUB_LABEL[card.club] || card.club} — {card.holder}
+        </div>
+        <div className="modal-field">
+          <label>Nom du match</label>
+          <input autoFocus value={event} onChange={(e) => setEvent(e.target.value)} placeholder="Ex: Paris vs Marseille" />
+        </div>
+        <div className="modal-field">
+          <label>Date</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="modal-field">
+          <label>Prix d'achat</label>
+          <input type="number" step="0.01" value={prixAchat} onChange={(e) => setPrixAchat(e.target.value)} placeholder="0,00" />
+        </div>
+        <div className="modal-actions">
+          <button className="btn" onClick={onClose}>
+            Annuler
+          </button>
+          <button
+            className="btn btn-primary"
+            disabled={!event.trim()}
+            onClick={() =>
+              onConfirm({
+                event: event.trim(),
+                date: date || null,
+                prixAchat: prixAchat === "" ? 0 : parseFloat(prixAchat) || 0,
+              })
+            }
+          >
+            Ajouter
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    STATUS BADGE / SELECT
    ============================================================ */
 function StatusBadge({ status }) {
@@ -291,7 +347,7 @@ function StatusBadge({ status }) {
 /* ============================================================
    MATCH TABLE ROW — used everywhere (Le Mans / per-club view / revente)
    ============================================================ */
-function MatchRow({ card, m, onUpdate, onSell, onUndo, showClubCol, showHolderCol }) {
+function MatchRow({ card, m, onUpdate, onSell, onUndo, onDelete, showClubCol, showHolderCol }) {
   const b = benefice(m);
   const bClass = b === null ? "benefice-zero" : b >= 0 ? "benefice-pos" : "benefice-neg";
   const col = CLUB_COLOR[card.club] || { bg: "#eee", fg: "#333" };
@@ -306,7 +362,19 @@ function MatchRow({ card, m, onUpdate, onSell, onUndo, showClubCol, showHolderCo
         </td>
       )}
       {showHolderCol && <td>{card.holder}</td>}
-      <td>{m.journee || (m.type === "ldc" ? "LDC" : m.type === "cdf" ? "CDF" : m.type === "conf" ? "Conf." : "—")}</td>
+      <td>
+        {m.journee
+          ? m.journee
+          : m.type === "ldc"
+          ? "LDC"
+          : m.type === "cdf"
+          ? "CDF"
+          : m.type === "conf"
+          ? "Conf."
+          : m.manual
+          ? "Ajouté"
+          : "—"}
+      </td>
       <td className="cell-event">{m.event}</td>
       <td className="cell-date">{fmtDate(m.date)}</td>
       <td className="cell-num">{fmtMoney(m.prixAchat)}</td>
@@ -317,7 +385,7 @@ function MatchRow({ card, m, onUpdate, onSell, onUndo, showClubCol, showHolderCo
       <td>{m.lieuVente || "—"}</td>
       <td className="cell-num">{m.prixVente !== null && m.prixVente !== undefined ? fmtMoney(m.prixVente) : "—"}</td>
       <td className={"cell-num " + bClass}>{b === null ? "—" : fmtMoney(b)}</td>
-      <td>
+      <td style={{ whiteSpace: "nowrap" }}>
         {m.status === "vendu" ? (
           <button className="btn-undo" onClick={() => onUndo(card.id, m.id)}>
             Annuler vente
@@ -325,6 +393,11 @@ function MatchRow({ card, m, onUpdate, onSell, onUndo, showClubCol, showHolderCo
         ) : (
           <button className="btn-sell" onClick={() => onSell(card.id, m.id)}>
             Vendre
+          </button>
+        )}
+        {m.manual && onDelete && (
+          <button className="icon-btn" title="Supprimer ce match" onClick={() => onDelete(card.id, m.id)}>
+            ✕
           </button>
         )}
       </td>
@@ -341,6 +414,7 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [selectedCardId, setSelectedCardId] = useState(null);
   const [sellTarget, setSellTarget] = useState(null); // {cardId, matchId}
+  const [addMatchTarget, setAddMatchTarget] = useState(null); // cardId
   const etagRef = useRef(null);
   const saveTimer = useRef(null);
   const initialized = useRef(false);
@@ -455,6 +529,37 @@ export default function App() {
     });
   };
 
+  const handleAddMatch = (cardId) => setAddMatchTarget(cardId);
+
+  const confirmAddMatch = ({ event, date, prixAchat }) => {
+    updateState((s) => {
+      const card = s.cards.find((c) => c.id === addMatchTarget);
+      card.matches.push({
+        id: uid(),
+        event,
+        date,
+        journee: null,
+        type: "manual",
+        status: "stock",
+        prixAchat,
+        acheteur: "",
+        dateVente: "",
+        lieuVente: "",
+        lieuAchat: "",
+        prixVente: null,
+        manual: true,
+      });
+    });
+    setAddMatchTarget(null);
+  };
+
+  const handleDeleteMatch = (cardId, matchId) => {
+    updateState((s) => {
+      const card = s.cards.find((c) => c.id === cardId);
+      card.matches = card.matches.filter((m) => m.id !== matchId);
+    });
+  };
+
   if (!state) {
     return (
       <div style={{ padding: 40, fontFamily: "sans-serif", color: "#6b6457" }}>Chargement…</div>
@@ -464,6 +569,8 @@ export default function App() {
   const sellMatch = sellTarget
     ? state.cards.find((c) => c.id === sellTarget.cardId)?.matches.find((m) => m.id === sellTarget.matchId)
     : null;
+
+  const addMatchCard = addMatchTarget ? state.cards.find((c) => c.id === addMatchTarget) : null;
 
   return (
     <>
@@ -493,6 +600,7 @@ export default function App() {
           ["revente", "Revente billets"],
           ["memberships", "Memberships"],
           ["concerts", "Concerts"],
+          ["clients", "Base clients"],
           ["recap", "Récap général"],
         ].map(([key, label]) => (
           <button
@@ -513,19 +621,32 @@ export default function App() {
           setSelectedCardId={setSelectedCardId}
           onSell={handleSell}
           onUndo={handleUndo}
+          onAddMatch={handleAddMatch}
+          onDeleteMatch={handleDeleteMatch}
           updateMatchField={updateMatchField}
         />
       )}
       {view === "emplacements" && <EmplacementsView state={state} />}
       {view === "revente" && (
-        <ReventeView state={state} onSell={handleSell} onUndo={handleUndo} updateMatchField={updateMatchField} />
+        <ReventeView
+          state={state}
+          onSell={handleSell}
+          onUndo={handleUndo}
+          onDeleteMatch={handleDeleteMatch}
+          updateMatchField={updateMatchField}
+        />
       )}
       {view === "memberships" && <MembershipsView state={state} />}
       {view === "concerts" && <ConcertsView state={state} updateState={updateState} />}
+      {view === "clients" && <ClientsView state={state} />}
       {view === "recap" && <RecapView state={state} />}
 
       {sellMatch && (
         <SellModal match={sellMatch} onClose={() => setSellTarget(null)} onConfirm={confirmSell} />
+      )}
+
+      {addMatchCard && (
+        <AddMatchModal card={addMatchCard} onClose={() => setAddMatchTarget(null)} onConfirm={confirmAddMatch} />
       )}
 
       <div className="footer-note">
@@ -690,7 +811,7 @@ function DashboardView({ state, goToClub }) {
 /* ============================================================
    CLUBS VIEW — generalized "Le Mans-style" calendar for EVERY card
    ============================================================ */
-function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, updateMatchField }) {
+function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, onAddMatch, onDeleteMatch, updateMatchField }) {
   const cards = state.cards;
   const activeId = selectedCardId && cards.find((c) => c.id === selectedCardId) ? selectedCardId : cards[0]?.id;
   const card = cards.find((c) => c.id === activeId);
@@ -779,6 +900,7 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, u
                 m={m}
                 onSell={onSell}
                 onUndo={onUndo}
+                onDelete={onDeleteMatch}
                 updateMatchField={updateMatchField}
                 showClubCol={false}
                 showHolderCol={false}
@@ -786,6 +908,12 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, u
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <button className="btn btn-primary" onClick={() => onAddMatch(card.id)}>
+          + Ajouter un match pour cette carte
+        </button>
       </div>
     </div>
   );
@@ -864,7 +992,7 @@ function EmplacementsView({ state }) {
 /* ============================================================
    REVENTE VIEW
    ============================================================ */
-function ReventeView({ state, onSell, onUndo, updateMatchField }) {
+function ReventeView({ state, onSell, onUndo, onDeleteMatch, updateMatchField }) {
   const [clubFilter, setClubFilter] = useState("");
   const [cardFilter, setCardFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -992,6 +1120,7 @@ function ReventeView({ state, onSell, onUndo, updateMatchField }) {
                   m={m}
                   onSell={onSell}
                   onUndo={onUndo}
+                  onDelete={onDeleteMatch}
                   updateMatchField={updateMatchField}
                   showClubCol={true}
                   showHolderCol={true}
@@ -1281,6 +1410,135 @@ function ConcertsView({ state, updateState }) {
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   CLIENTS VIEW — base clients auto-générée depuis les ventes
+   (foot : matches vendus avec un acheteur renseigné
+   concerts : billets vendus avec un acheteur renseigné)
+   ============================================================ */
+function buildClientsIndex(state) {
+  const byClient = {}; // name (normalized) -> { displayName, purchases: [...], total }
+
+  const addPurchase = (name, purchase) => {
+    const key = name.trim().toLowerCase();
+    if (!key) return;
+    if (!byClient[key]) {
+      byClient[key] = { displayName: name.trim(), purchases: [], total: 0 };
+    }
+    byClient[key].purchases.push(purchase);
+    byClient[key].total += purchase.montant || 0;
+  };
+
+  state.cards.forEach((c) => {
+    c.matches.forEach((m) => {
+      if (m.status === "vendu" && m.acheteur && m.acheteur.trim()) {
+        addPurchase(m.acheteur, {
+          type: "foot",
+          club: CLUB_LABEL[c.club] || c.club,
+          carte: c.holder,
+          match: m.event,
+          date: m.dateVente || m.date,
+          montant: parseFloat(m.prixVente) || 0,
+          lieu: m.lieuVente || "",
+        });
+      }
+    });
+  });
+
+  state.concerts.forEach((c) => {
+    if (c.status === "vendu" && c.acheteur && c.acheteur.trim()) {
+      addPurchase(c.acheteur, {
+        type: "concert",
+        club: null,
+        carte: c.artiste || "Concert",
+        match: c.artiste ? c.artiste : "(sans nom)",
+        date: c.date,
+        montant: parseFloat(c.prixVente) || 0,
+        lieu: c.lieu || "",
+      });
+    }
+  });
+
+  return Object.values(byClient).sort((a, b) => b.total - a.total);
+}
+
+function ClientsView({ state }) {
+  const clients = buildClientsIndex(state);
+  const totalRevenue = clients.reduce((s, c) => s + c.total, 0);
+  const totalPurchases = clients.reduce((s, c) => s + c.purchases.length, 0);
+
+  return (
+    <div className="view">
+      <div className="view-head">
+        <div>
+          <h1 className="view-title">Base clients</h1>
+          <div className="view-desc">
+            Générée automatiquement à partir de tous les billets vendus (foot + concerts) où un acheteur est renseigné.
+          </div>
+        </div>
+      </div>
+
+      <div className="kpi-row">
+        <div className="kpi">
+          <div className="kpi-label">Clients distincts</div>
+          <div className="kpi-value">{clients.length}</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">Achats enregistrés</div>
+          <div className="kpi-value">{totalPurchases}</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">Revenus totaux</div>
+          <div className="kpi-value pos">{fmtMoney0(totalRevenue)}</div>
+        </div>
+      </div>
+
+      {clients.length === 0 ? (
+        <div className="empty">
+          <div className="empty-title">Aucun client pour le moment</div>
+          <div>Dès qu'un billet est vendu avec un nom d'acheteur, il apparaîtra ici automatiquement.</div>
+        </div>
+      ) : (
+        clients.map((cl) => (
+          <div className="client-card" key={cl.displayName}>
+            <div className="client-head">
+              <div className="client-name">{cl.displayName}</div>
+              <div className="client-meta">
+                {cl.purchases.length} achat{cl.purchases.length > 1 ? "s" : ""} — total {fmtMoney0(cl.total)}
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Club</th>
+                    <th>Match / événement</th>
+                    <th>Date</th>
+                    <th>Lieu vente</th>
+                    <th>Montant</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cl.purchases.map((p, i) => (
+                    <tr key={i}>
+                      <td>{p.type === "foot" ? "Foot" : "Concert"}</td>
+                      <td>{p.club || "—"}</td>
+                      <td className="cell-event">{p.match}</td>
+                      <td className="cell-date">{fmtDate(p.date)}</td>
+                      <td>{p.lieu || "—"}</td>
+                      <td className="cell-num">{fmtMoney(p.montant)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))
       )}
     </div>
   );
