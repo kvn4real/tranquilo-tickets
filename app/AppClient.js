@@ -55,6 +55,56 @@ function benefice(m) {
   if (m.prixVente === null || m.prixVente === undefined || m.prixVente === "") return null;
   return (parseFloat(m.prixVente) || 0) - (parseFloat(m.prixAchat) || 0);
 }
+function round2(n) {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/* ============================================================
+   CARD STATS — SOURCE UNIQUE DE VÉRITÉ POUR LES CALCULS D'ABONNEMENT
+   ------------------------------------------------------------
+   champCount et perMatch ne sont JAMAIS stockés en dur sur la carte :
+   ils sont toujours recalculés depuis card.matches, à chaque rendu.
+   Coût abonnement = aboPrice + extraCard, réparti uniquement sur les
+   matchs de championnat (type "champ"). Les matchs ajoutés
+   manuellement (type "manual") n'entrent jamais dans ce calcul : leur
+   prix d'achat est saisi librement et reste indépendant.
+   ============================================================ */
+function getCardStats(card) {
+  const champMatches = card.matches.filter((m) => m.type === "champ");
+  const champCount = champMatches.length;
+  const aboTotal = (card.aboPrice || 0) + (card.extraCard || 0);
+  const perMatch = champCount > 0 ? aboTotal / champCount : 0;
+  return { champCount, perMatch: round2(perMatch), aboTotal: round2(aboTotal) };
+}
+
+/* Dépense réelle totale d'une carte = abonnement (réparti sur les matchs
+   de championnat, donc déjà compté une fois via aboTotal) + tous les
+   matchs hors-championnat dont le prix est saisi séparément (LDC, CDF,
+   conférence, et matchs ajoutés manuellement). On ne fait JAMAIS
+   aboTotal + somme(prixAchat de tous les matchs), car cela compterait
+   les matchs "champ" deux fois (une fois dans aboTotal, une fois dans
+   leur prixAchat individuel, qui n'est qu'une répartition du même
+   abonnement). */
+function getCardTotalSpend(card) {
+  const { aboTotal } = getCardStats(card);
+  const extraSpend = card.matches
+    .filter((m) => m.type !== "champ")
+    .reduce((s, m) => s + (parseFloat(m.prixAchat) || 0), 0);
+  return round2(aboTotal + extraSpend);
+}
+
+/* Resynchronise le prixAchat de tous les matchs de championnat d'une
+   carte à partir de aboPrice/extraCard/champCount courants. À appeler
+   après tout ajout/suppression de match ou modification du prix de
+   l'abonnement, pour que chaque ligne reste exacte. */
+function resyncChampPrices(card) {
+  const { perMatch } = getCardStats(card);
+  card.matches.forEach((m) => {
+    if (m.type === "champ") {
+      m.prixAchat = perMatch;
+    }
+  });
+}
 
 /* ============================================================
    BUILD INITIAL STATE
@@ -64,17 +114,13 @@ function buildInitialState() {
   for (const sheetName in RAW_CARDS) {
     const c = RAW_CARDS[sheetName];
     const meta = c.meta;
-    const champ = c.matches.filter((m) => m.journee);
-    const champCount = champ.length;
-    const aboTotal = (meta.abo_price || 0) + (meta.extra_card || 0);
-    const perMatch = champCount > 0 ? aboTotal / champCount : 0;
 
     const matches = c.matches.map((m) => {
       const isChamp = !!m.journee;
       const isLDC = /LDC/i.test(m.event);
       const isCDF = /CDF/i.test(m.event);
       const isConf = /conference/i.test(m.event);
-      let type = "champ";
+      let type = isChamp ? "champ" : "other";
       if (isLDC) type = "ldc";
       else if (isCDF) type = "cdf";
       else if (isConf) type = "conf";
@@ -85,7 +131,7 @@ function buildInitialState() {
         journee: m.journee,
         type,
         status: normStatus(m.vente_status),
-        prixAchat: isChamp ? Math.round(perMatch * 100) / 100 : m.prix_achat || 0,
+        prixAchat: m.prix_achat || 0, // recalculé juste après pour les matchs "champ" via resyncChampPrices
         acheteur: m.acheteur || "",
         dateVente: m.date_vente || "",
         lieuVente: m.lieu_vente || "",
@@ -95,17 +141,17 @@ function buildInitialState() {
       };
     });
 
-    cards.push({
+    const card = {
       id: uid(),
       sheetName,
       club: meta.club,
       holder: (meta.holder || "").trim(),
       aboPrice: meta.abo_price || 0,
       extraCard: meta.extra_card || 0,
-      champCount,
-      perMatch: Math.round(perMatch * 100) / 100,
       matches,
-    });
+    };
+    resyncChampPrices(card);
+    cards.push(card);
   }
   return { cards, concerts: [] };
 }
@@ -549,6 +595,7 @@ export default function App() {
         prixVente: null,
         manual: true,
       });
+      resyncChampPrices(card);
     });
     setAddMatchTarget(null);
   };
@@ -557,6 +604,7 @@ export default function App() {
     updateState((s) => {
       const card = s.cards.find((c) => c.id === cardId);
       card.matches = card.matches.filter((m) => m.id !== matchId);
+      resyncChampPrices(card);
     });
   };
 
@@ -662,12 +710,14 @@ export default function App() {
 function DashboardView({ state, goToClub }) {
   const cards = state.cards;
   let totalAbo = 0,
+    totalSpendReal = 0,
     totalVendu = 0,
     totalBenef = 0,
     nbBillets = 0,
     nbVendus = 0;
   cards.forEach((c) => {
     totalAbo += c.aboPrice + c.extraCard;
+    totalSpendReal += getCardTotalSpend(c);
     c.matches.forEach((m) => {
       nbBillets++;
       if (m.status === "vendu") nbVendus++;
@@ -708,6 +758,11 @@ function DashboardView({ state, goToClub }) {
           <div className="kpi-sub">{cards.length} cartes actives</div>
         </div>
         <div className="kpi">
+          <div className="kpi-label">Dépense réelle totale</div>
+          <div className="kpi-value">{fmtMoney0(totalSpendReal)}</div>
+          <div className="kpi-sub">abonnements + LDC/CDF/matchs ajoutés</div>
+        </div>
+        <div className="kpi">
           <div className="kpi-label">Billets foot vendus</div>
           <div className="kpi-value pos">
             {nbVendus} / {nbBillets}
@@ -732,6 +787,7 @@ function DashboardView({ state, goToClub }) {
             const sold = c.matches.filter((m) => m.status === "vendu").length;
             const stock = c.matches.filter((m) => m.status === "stock").length;
             const col = CLUB_COLOR[c.club] || { bg: "#eee", fg: "#333" };
+            const { perMatch } = getCardStats(c);
             return (
               <div className="club-card" key={c.id} onClick={() => goToClub(c.id)}>
                 <div className="club-tag">{CLUB_LABEL[c.club] || c.club}</div>
@@ -741,7 +797,7 @@ function DashboardView({ state, goToClub }) {
                     Abo <b>{fmtMoney0(c.aboPrice + c.extraCard)}</b>
                   </span>
                   <span>
-                    /match <b>{fmtMoney(c.perMatch)}</b>
+                    /match <b>{fmtMoney(perMatch)}</b>
                   </span>
                 </div>
                 <div className="club-stats" style={{ marginTop: 6 }}>
@@ -821,6 +877,7 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, o
   const sold = card.matches.filter((m) => m.status === "vendu");
   const totalBenef = sold.reduce((s, m) => s + (benefice(m) || 0), 0);
   const col = CLUB_COLOR[card.club] || { bg: "#eee", fg: "#333" };
+  const { champCount, perMatch } = getCardStats(card);
 
   return (
     <div className="view">
@@ -834,6 +891,7 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, o
       <div className="card-grid" style={{ marginBottom: 18 }}>
         {cards.map((c) => {
           const ccol = CLUB_COLOR[c.club] || { bg: "#eee", fg: "#333" };
+          const { perMatch: cPerMatch } = getCardStats(c);
           return (
             <div
               key={c.id}
@@ -849,7 +907,7 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, o
                   Abo <b>{fmtMoney0(c.aboPrice + c.extraCard)}</b>
                 </span>
                 <span>
-                  /match <b>{fmtMoney(c.perMatch)}</b>
+                  /match <b>{fmtMoney(cPerMatch)}</b>
                 </span>
               </div>
             </div>
@@ -864,11 +922,11 @@ function ClubsView({ state, selectedCardId, setSelectedCardId, onSell, onUndo, o
         </div>
         <div className="kpi">
           <div className="kpi-label">Matchs championnat dom.</div>
-          <div className="kpi-value">{card.champCount}</div>
+          <div className="kpi-value">{champCount}</div>
         </div>
         <div className="kpi">
           <div className="kpi-label">Prix par match</div>
-          <div className="kpi-value">{fmtMoney(card.perMatch)}</div>
+          <div className="kpi-value">{fmtMoney(perMatch)}</div>
         </div>
         <div className="kpi">
           <div className="kpi-label">Bénéfice revente</div>
@@ -942,7 +1000,7 @@ function EmplacementsView({ state }) {
       {CLUB_ORDER.map((club) => {
         const cards = byClub[club];
         if (!cards) return null;
-        const totalAbo = cards.reduce((s, c) => s + c.aboPrice + c.extraCard, 0);
+        const totalAbo = cards.reduce((s, c) => s + getCardTotalSpend(c), 0);
         const col = CLUB_COLOR[club] || { bg: "#eee", fg: "#333" };
         return (
           <div className="section" key={club}>
@@ -960,25 +1018,29 @@ function EmplacementsView({ state }) {
                     <th>Type</th>
                     <th>Abonnement</th>
                     <th>Frais carte</th>
-                    <th>Coût total</th>
+                    <th>Dépense totale</th>
                     <th>Matchs champ.</th>
                     <th>Prix / match</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {cards.map((c) => (
-                    <tr key={c.id}>
-                      <td className="cell-event">{c.holder}</td>
-                      <td>{c.matches.some((m) => m.type === "ldc") ? "Abonnement + Pack LDC" : "Abonnement"}</td>
-                      <td className="cell-num">{fmtMoney(c.aboPrice)}</td>
-                      <td className="cell-num">{c.extraCard ? fmtMoney(c.extraCard) : "—"}</td>
-                      <td className="cell-num" style={{ fontWeight: 700 }}>
-                        {fmtMoney(c.aboPrice + c.extraCard)}
-                      </td>
-                      <td className="cell-num">{c.champCount}</td>
-                      <td className="cell-num">{fmtMoney(c.perMatch)}</td>
-                    </tr>
-                  ))}
+                  {cards.map((c) => {
+                    const { champCount: cChampCount, perMatch: cPerMatch } = getCardStats(c);
+                    const cTotalSpend = getCardTotalSpend(c);
+                    return (
+                      <tr key={c.id}>
+                        <td className="cell-event">{c.holder}</td>
+                        <td>{c.matches.some((m) => m.type === "ldc") ? "Abonnement + Pack LDC" : "Abonnement"}</td>
+                        <td className="cell-num">{fmtMoney(c.aboPrice)}</td>
+                        <td className="cell-num">{c.extraCard ? fmtMoney(c.extraCard) : "—"}</td>
+                        <td className="cell-num" style={{ fontWeight: 700 }}>
+                          {fmtMoney(cTotalSpend)}
+                        </td>
+                        <td className="cell-num">{cChampCount}</td>
+                        <td className="cell-num">{fmtMoney(cPerMatch)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1178,6 +1240,7 @@ function MembershipsView({ state }) {
           <tbody>
             {cards.map((c) => {
               const col = CLUB_COLOR[c.club] || { bg: "#eee", fg: "#333" };
+              const { champCount: cChampCount, perMatch: cPerMatch } = getCardStats(c);
               return (
                 <tr key={c.id}>
                   <td>
@@ -1191,8 +1254,8 @@ function MembershipsView({ state }) {
                   <td className="cell-num" style={{ fontWeight: 700 }}>
                     {fmtMoney(c.aboPrice + c.extraCard)}
                   </td>
-                  <td className="cell-num">{c.champCount}</td>
-                  <td className="cell-num">{fmtMoney(c.perMatch)}</td>
+                  <td className="cell-num">{cChampCount}</td>
+                  <td className="cell-num">{fmtMoney(cPerMatch)}</td>
                 </tr>
               );
             })}
